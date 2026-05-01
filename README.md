@@ -146,27 +146,27 @@ Wine wins on speed and on GPU when DXVK/VKD3D translate cleanly. winpodx wins on
 
 ```
                      ┌─────────────────────────────┐
-  Click "Word"       │     Linux Desktop (KDE,      │
-  in app menu  ───>  │     GNOME, Sway, ...)        │
+  Click "Word"       │     Linux Desktop (KDE,     │
+  in app menu  ───>  │     GNOME, Sway, ...)       │
                      └──────────────┬──────────────┘
                                     │
                      ┌──────────────▼──────────────┐
-                     │         winpodx              │
-                     │  ┌─────────────────────┐     │
-                     │  │ auto-provision:      │     │
-                     │  │  config → password   │     │
-                     │  │  → container → RDP   │     │
-                     │  │  → desktop entries   │     │
-                     │  └─────────────────────┘     │
+                     │         winpodx             │
+                     │  ┌─────────────────────┐    │
+                     │  │ auto-provision:     │    │
+                     │  │  config → password  │    │
+                     │  │  → container → RDP  │    │
+                     │  │  → desktop entries  │    │
+                     │  └─────────────────────┘    │
                      └──────────────┬──────────────┘
                                     │ FreeRDP RemoteApp
                      ┌──────────────▼──────────────┐
-                     │   Windows Container (Podman) │
-                     │   ┌──────────────────────┐   │
-                     │   │  Word  Excel  PPT ... │   │
-                     │   │ multi-session/rdprrap │   │
-                     │   └──────────────────────┘   │
-                     │   127.0.0.1:3390 (TLS)       │
+                     │   Windows Container (Podman)│
+                     │   ┌──────────────────────┐  │
+                     │   │  Word  Excel  PPT ...│  │
+                     │   │ multi-session/rdprrap│  │
+                     │   └──────────────────────┘  │
+                     │   127.0.0.1:3390 (TLS)      │
                      └─────────────────────────────┘
 ```
 
