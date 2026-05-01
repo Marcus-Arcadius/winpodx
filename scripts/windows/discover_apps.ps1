@@ -186,6 +186,7 @@ function Add-Result {
     $seen[$key] = $true
     $results.Add([ordered]@{
         name          = $name
+        description   = [string]$Entry.description
         path          = $path
         args          = [string]$Entry.args
         source        = [string]$Entry.source
