@@ -9,7 +9,13 @@ and this project aims to follow [Semantic Versioning](https://semver.org/spec/v2
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-04-30
+
+Major release — modular core, HTTP guest agent, and a comprehensive health-check surface. Replaces the FreeRDP RemoteApp pipeline as the default host→guest command channel.
+
 ### Added
+- **HTTP guest agent (rev4).** `agent.ps1` runs inside Windows on `127.0.0.1:8765`, bound via `+:8765` so QEMU's user-mode NAT can reach it. Bearer-authed `/exec` (base64-encoded PowerShell payloads) replaces FreeRDP RemoteApp as the default host→guest command channel; `/health` stays unauthenticated for the readiness probe. Child PS spawned via `[Diagnostics.Process]` + `CreateNoWindow=$true` + async `ReadToEndAsync` — no PS-window flashes, no pipe-buffer deadlocks. Token delivered via the OEM bind mount (mode `0600` on host, gitignored).
+- **Transport ABC v1** (`core/transport/{base,agent,freerdp,dispatch}`). `dispatch()` prefers the agent and falls back to FreeRDP when `/health` doesn't answer. Password rotation explicitly **never** routes through Transport (rule #6 in `docs/TRANSPORT_ABC.md`) — rotation owns its own credentials and calls `run_in_windows` directly to avoid a bootstrap loop on stale-password recovery.
 - **`winpodx check` health probes.** New CLI command runs a fast multi-source health audit and prints one line per probe with `OK` / `WARN` / `FAIL` / `SKIP` and per-probe duration. `--json` emits machine-readable output for scripting. Exit code is `0` unless any probe is `FAIL`. Probes:
   - `pod_running`, `rdp_port`, `agent_health` — surface bring-up state
   - `guest_exec` — POSTs `/exec` with a trivial `Write-Output ok` and verifies rc=0 + stdout="ok". Proves the host→guest channel actually round-trips, not just that `/health` answers

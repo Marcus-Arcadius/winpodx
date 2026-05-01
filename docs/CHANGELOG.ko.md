@@ -9,7 +9,13 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-04-30
+
+메이저 릴리스 — 모듈형 core 재구조, HTTP guest agent, 통합 헬스체크 surface. FreeRDP RemoteApp 파이프라인을 기본 host→guest 채널에서 대체.
+
 ### 추가
+- **HTTP guest agent (rev4).** `agent.ps1` 가 Windows 안 `127.0.0.1:8765` 에서 동작, `+:8765` 로 바인드해서 QEMU user-mode NAT 통과. Bearer-authed `/exec` (base64 인코딩 PowerShell 페이로드) 가 FreeRDP RemoteApp 을 기본 host→guest 채널에서 대체; `/health` 는 readiness probe 위해 unauthenticated 유지. child PS 는 `[Diagnostics.Process]` + `CreateNoWindow=$true` + 비동기 `ReadToEndAsync` 로 spawn — PS창 깜빡임 없음, pipe buffer deadlock 없음. 토큰은 OEM bind mount 로 전달 (호스트 mode `0600`, gitignored).
+- **Transport ABC v1** (`core/transport/{base,agent,freerdp,dispatch}`). `dispatch()` 가 agent 우선, `/health` 응답 없으면 FreeRDP 폴백. Password rotation 은 명시적으로 Transport 통하지 **않음** (`docs/TRANSPORT_ABC.md` 규칙 #6) — rotation 은 자체 credential 소유 + `run_in_windows` 직접 호출 (stale-password 복구 시 bootstrap loop 회피).
 - **`winpodx check` 헬스 프로브.** 새 CLI 명령어가 멀티 소스 헬스 점검을 한 번에 실행하고 각 프로브를 `OK` / `WARN` / `FAIL` / `SKIP` 와 측정 시간으로 출력. `--json` 로 머신 판독용 출력. exit code 는 어떤 프로브든 `FAIL` 일 때만 `1`. 프로브:
   - `pod_running`, `rdp_port`, `agent_health` — bring-up 상태
   - `guest_exec` — `Write-Output ok` 페이로드를 `/exec` 로 보내 rc=0 + stdout="ok" 검증. host→guest 채널이 실제로 round-trip 하는지 (단순히 `/health` 응답만이 아니라) 증명
