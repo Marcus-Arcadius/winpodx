@@ -286,6 +286,7 @@ def apply_windows_runtime_fixes(cfg: Config) -> dict[str, str]:
         ("rdp_timeouts", _apply_rdp_timeouts),
         ("oem_runtime_fixes", _apply_oem_runtime_fixes),
         ("multi_session", _apply_multi_session),
+        ("vbs_launchers", _apply_vbs_launchers),
     ):
         try:
             fn(cfg)
@@ -350,6 +351,93 @@ def _apply_oem_runtime_fixes(cfg: Config) -> None:
             f"oem_runtime_fixes apply failed (rc={result.rc}): {result.stderr.strip()}"
         )
     log.info("oem_runtime_fixes: %s", result.stdout.strip())
+
+
+def _apply_vbs_launchers(cfg: Config) -> None:
+    """Push hidden-launcher.vbs / launch_uwp.vbs / launch_uwp.ps1 + update
+    HKCU\\Run so existing pods stop flashing PowerShell windows on agent
+    autostart and UWP launches.
+
+    Migration path for users on v0.3.0-RTM1 (OEM v12). Fresh installs from
+    OEM v13+ already have the files staged via install.bat; this step is
+    a no-op then. Targets ``C:\\Users\\Public\\winpodx\\launchers\\``
+    because Public is universally writable for Authenticated Users (the
+    agent runs as User and can't write to ``C:\\OEM\\``, which is
+    SYSTEM-owned).
+
+    Idempotent — re-running just rewrites the files and the registry
+    value. The autostart change takes effect on the next user session
+    logon (or pod restart); UWP launch path is picked up immediately by
+    the host's next ``rdp.build_rdp_command`` call.
+    """
+    if cfg.pod.backend not in ("podman", "docker"):
+        return
+
+    from pathlib import Path
+
+    # Locate the source files shipped with this winpodx install. Same
+    # search order as ``_ps_script_path`` and ``_bundled_oem_version``.
+    candidates_root = (
+        Path(__file__).resolve().parent.parent.parent.parent / "config" / "oem",
+        Path.home() / ".local" / "bin" / "winpodx-app" / "config" / "oem",
+    )
+    files = ("hidden-launcher.vbs", "launch_uwp.vbs", "launch_uwp.ps1")
+    sources: dict[str, str] = {}
+    for fname in files:
+        for root in candidates_root:
+            path = root / fname
+            if path.is_file():
+                try:
+                    sources[fname] = path.read_text(encoding="utf-8")
+                except OSError as e:
+                    raise RuntimeError(f"cannot read {path}: {e}") from e
+                break
+        else:
+            raise RuntimeError(f"vbs_launchers source missing: {fname}")
+
+    # Build a single PS payload that writes all three files + updates
+    # HKCU\Run in one /exec round-trip. Each file body is base64-encoded
+    # in transit so embedded quotes / newlines / unicode survive the
+    # PowerShell here-string boundary cleanly.
+    import base64 as _b64
+
+    target_dir = "C:\\Users\\Public\\winpodx\\launchers"
+    lines = [
+        "$ErrorActionPreference = 'Stop'",
+        f"$dir = '{target_dir}'",
+        "if (-not (Test-Path $dir)) { [void](New-Item -ItemType Directory -Force -Path $dir) }",
+    ]
+    for fname, body in sources.items():
+        b64 = _b64.b64encode(body.encode("utf-8")).decode("ascii")
+        target = f"{target_dir}\\{fname}"
+        lines.append(f"$bytes = [Convert]::FromBase64String('{b64}')")
+        lines.append(f"[IO.File]::WriteAllBytes('{target}', $bytes)")
+    # HKCU\Run\WinpodxAgent — point at the new VBS launcher so the next
+    # user session logon stops flashing a PS console.
+    reg_value = (
+        f'wscript.exe "{target_dir}\\hidden-launcher.vbs" '
+        '"powershell.exe" "-NoProfile" "-ExecutionPolicy" "Bypass" '
+        '"-File" "C:\\OEM\\agent.ps1"'
+    ).replace("'", "''")
+    lines.extend(
+        [
+            "$runKey = 'HKCU:\\Software\\Microsoft\\Windows\\CurrentVersion\\Run'",
+            "if (-not (Test-Path $runKey)) { [void](New-Item -Path $runKey -Force) }",
+            f"Set-ItemProperty -Path $runKey -Name 'WinpodxAgent' -Value '{reg_value}'",
+            "Write-Output 'vbs_launchers applied'",
+        ]
+    )
+    payload = "\n".join(lines) + "\n"
+
+    from winpodx.core.windows_exec import WindowsExecError
+
+    try:
+        result = _apply_via_transport(cfg, payload, description="apply-vbs-launchers")
+    except WindowsExecError as e:
+        raise RuntimeError(f"vbs_launchers apply failed: {e}") from e
+    if result.rc != 0:
+        raise RuntimeError(f"vbs_launchers apply failed (rc={result.rc}): {result.stderr.strip()}")
+    log.info("vbs_launchers: %s", result.stdout.strip())
 
 
 def _apply_rdp_timeouts(cfg: Config) -> None:

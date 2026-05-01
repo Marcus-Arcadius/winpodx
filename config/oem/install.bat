@@ -261,10 +261,18 @@ REM v0.2.2-rev1: winpodx guest HTTP agent
 REM ---------------------------------------------------------------------
 echo [winpodx] Installing winpodx guest agent...
 copy /Y "%~dp0agent\agent.ps1" "C:\OEM\agent.ps1" 2>nul
-copy /Y "%~dp0hidden-launcher.vbs" "C:\OEM\hidden-launcher.vbs" 2>nul
-copy /Y "%~dp0launch_uwp.vbs" "C:\OEM\launch_uwp.vbs" 2>nul
-copy /Y "%~dp0launch_uwp.ps1" "C:\OEM\launch_uwp.ps1" 2>nul
 mkdir C:\OEM\agent-runs 2>nul
+
+REM Hidden launchers go under C:\Users\Public\winpodx\launchers\ rather than
+REM C:\OEM\. Public is universally writable for Authenticated Users, so the
+REM agent (which runs as User, non-admin) can later overwrite these files
+REM during a `winpodx pod apply-fixes` migration without needing UAC. C:\OEM\
+REM is SYSTEM-owned and rejects User writes by default.
+mkdir "C:\Users\Public\winpodx" 2>nul
+mkdir "C:\Users\Public\winpodx\launchers" 2>nul
+copy /Y "%~dp0hidden-launcher.vbs" "C:\Users\Public\winpodx\launchers\hidden-launcher.vbs" 2>nul
+copy /Y "%~dp0launch_uwp.vbs" "C:\Users\Public\winpodx\launchers\launch_uwp.vbs" 2>nul
+copy /Y "%~dp0launch_uwp.ps1" "C:\Users\Public\winpodx\launchers\launch_uwp.ps1" 2>nul
 
 REM Pre-register the URL ACL for agent.ps1's HttpListener prefix.
 REM
@@ -296,7 +304,7 @@ REM ~50ms on every user logon. wscript.exe is a GUI-subsystem process
 REM (no console of its own) and WshShell.Run with intWindowStyle=0
 REM propagates SW_HIDE to CreateProcess — the spawned powershell starts
 REM windowless, never flashing.
-reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v WinpodxAgent /t REG_SZ /d "wscript.exe \"C:\OEM\hidden-launcher.vbs\" \"powershell.exe\" \"-NoProfile\" \"-ExecutionPolicy\" \"Bypass\" \"-File\" \"C:\OEM\agent.ps1\"" /f >nul 2>&1
+reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Run" /v WinpodxAgent /t REG_SZ /d "wscript.exe \"C:\Users\Public\winpodx\launchers\hidden-launcher.vbs\" \"powershell.exe\" \"-NoProfile\" \"-ExecutionPolicy\" \"Bypass\" \"-File\" \"C:\OEM\agent.ps1\"" /f >nul 2>&1
 
 REM Token is delivered via the OEM bind mount — no \\tsclient\home copy
 REM needed. Setup stages it to {oem_dir}/agent_token.txt before container

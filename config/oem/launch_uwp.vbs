@@ -23,7 +23,7 @@ Set shell = CreateObject("WScript.Shell")
 
 aumid = WScript.Arguments(0)
 
-cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ""C:\OEM\launch_uwp.ps1"" """ & aumid & """"
+cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File ""C:\Users\Public\winpodx\launchers\launch_uwp.ps1"" """ & aumid & """"
 
 ' 0 = SW_HIDE so the powershell.exe child also starts windowless. Don't wait
 ' on the call so wscript itself exits immediately and the UWP frame is the

@@ -249,7 +249,10 @@ def build_rdp_command(
         wm_class = (wm_class_hint or "").strip().lower()
         if not wm_class or not _is_safe_wm_class(wm_class):
             wm_class = _uwp_fallback_wm_class(aumid)
-        app_arg = f"/app:program:wscript.exe,name:{wm_class},cmd:C:\\OEM\\launch_uwp.vbs {aumid}"
+        app_arg = (
+            f"/app:program:wscript.exe,name:{wm_class},"
+            f"cmd:C:\\Users\\Public\\winpodx\\launchers\\launch_uwp.vbs {aumid}"
+        )
         cmd.append(app_arg)
         cmd.append(f"/wm-class:{wm_class}")
         cmd.append("+grab-keyboard")
