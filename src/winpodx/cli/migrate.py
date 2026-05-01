@@ -34,6 +34,24 @@ _MARKER_VERSION_RE = re.compile(r"^\d+(\.\d+){0,3}[a-z0-9]*$")
 # version. Add new entries at the top when cutting a release. Keep each
 # note user-facing, not developer-facing — three to six bullets max.
 _VERSION_NOTES: dict[str, list[str]] = {
+    "0.3.0": [
+        "HTTP guest agent — host→guest commands now ride a bearer-authed "
+        "/exec endpoint inside Windows. PowerShell window flashes on "
+        "every command are gone.",
+        "New `winpodx check` CLI runs nine health probes (pod / RDP / "
+        "agent / round-trip / in-guest summary / OEM / disk / …) with "
+        "OK / WARN / FAIL / SKIP and per-probe duration. `--json` for "
+        "scripting. The GUI Info page mirrors it as a live Health card.",
+        "Sidebar transport indicators — small `A` (agent) and `R` (RDP) "
+        "dots beside the pod chip turn green/red live so you can see at "
+        "a glance which channel the next launch will use.",
+        "Modular core split: pod lifecycle, password rotation, "
+        "discovery, and host→guest RPC are now separate packages "
+        "behind a Transport ABC, with the self-heal-apply loop (the "
+        "source of the previous PS-window storm) deleted entirely.",
+        "Container recreate required for the in-guest agent to land — "
+        "old pods keep working via the FreeRDP fallback channel.",
+    ],
     "0.1.9": [
         "The 14 bundled app profiles were dropped — the app menu now populates "
         "from the apps actually installed in your Windows guest.",
