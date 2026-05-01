@@ -281,6 +281,7 @@ def test_apply_windows_runtime_fixes_returns_per_helper_status(monkeypatch):
         "rdp_timeouts",
         "oem_runtime_fixes",
         "multi_session",
+        "vbs_launchers",
     }
     for v in result.values():
         assert v == "ok"
