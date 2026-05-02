@@ -271,11 +271,22 @@ def _apply_multi_session(cfg: Config) -> None:
         # never restarts services. Markers: enabled / not-activated /
         # extract-failed / installer-failed.
         '$marker = "C:\\winpodx\\rdprrap\\.activation_status"',
+        '$logPath = "C:\\winpodx\\rdprrap\\install.log"',
         "if (Test-Path $marker) {",
         "    $status = (Get-Content -LiteralPath $marker"
         " -ErrorAction SilentlyContinue | Select-Object -First 1)",
         "    if ($status) {",
         '        Write-Output ("rdprrap status: $status (rdprrap-conf at $rdprrap)")',
+        # On any non-enabled state, append the tail of install.log so the
+        # caller (host-side `winpodx pod apply-fixes`) sees the actual
+        # failure reason without having to RDP into the guest. The log
+        # is only tailed (~last 30 lines) to keep the apply output bounded.
+        "        if ($status -ne 'enabled' -and (Test-Path $logPath)) {",
+        '            Write-Output ""',
+        "            Write-Output '--- install.log tail ---'",
+        "            Get-Content -LiteralPath $logPath -Tail 30 -ErrorAction SilentlyContinue",
+        "            Write-Output '--- end install.log ---'",
+        "        }",
         "        exit 0",
         "    }",
         "}",
