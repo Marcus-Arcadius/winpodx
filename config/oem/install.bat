@@ -1,7 +1,7 @@
 @echo off
 REM First-boot OEM setup for winpodx Windows guest. Runs once during dockur's unattended install. Every action must stay idempotent — there is no guest-side re-run channel in 0.1.6 (push/exec bridge planned for a later release).
 
-set WINPODX_OEM_VERSION=14
+set WINPODX_OEM_VERSION=15
 
 echo [winpodx] Starting post-install configuration (version %WINPODX_OEM_VERSION%)...
 
@@ -220,23 +220,64 @@ if /I not "%RDPRRAP_GOT%"=="%RDPRRAP_SHA256%" (
 )
 
 mkdir "%RDPRRAP_DIR%" 2>nul
+
+REM Activation marker. Records the final state for the host-side
+REM `_apply_multi_session` probe and for `winpodx pod multi-session
+REM status` to surface accurately. Values:
+REM   enabled       — rdprrap-installer succeeded AND ServiceDll points at termwrap.dll
+REM   extract-failed — Expand-Archive failed after all retries
+REM   installer-failed — rdprrap-installer.exe failed after all retries
+REM   not-activated — installer succeeded but ServiceDll never flipped
+REM   missing-bundle — bundle absent / sha mismatch (skip already happened earlier)
+set "RDPRRAP_STATUS=C:\winpodx\rdprrap\.activation_status"
+
+REM --- Extract with retries -------------------------------------------------
+REM Expand-Archive occasionally fails on first-boot Sysprep with file-lock /
+REM antivirus interference. Retry up to 3 times with a brief pause between.
 echo [winpodx] Extracting rdprrap %RDPRRAP_VERSION%...
-powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Expand-Archive -LiteralPath '%RDPRRAP_ZIP_SRC%' -DestinationPath '%RDPRRAP_DIR%' -Force; $inner = Get-ChildItem -LiteralPath '%RDPRRAP_DIR%' -Directory -Filter 'rdprrap-*' | Select-Object -First 1; if ($inner) { Get-ChildItem -LiteralPath $inner.FullName -Force | Move-Item -Destination '%RDPRRAP_DIR%' -Force; Remove-Item -LiteralPath $inner.FullName -Recurse -Force } exit 0 } catch { Write-Error $_; exit 1 }"
-if errorlevel 1 (
-    echo [winpodx] WARNING: rdprrap extraction failed; staying single-session.
+set "RDPRRAP_EXTRACTED="
+for %%T in (1 2 3) do (
+    if not defined RDPRRAP_EXTRACTED (
+        powershell -NoProfile -ExecutionPolicy Bypass -Command "try { Expand-Archive -LiteralPath '%RDPRRAP_ZIP_SRC%' -DestinationPath '%RDPRRAP_DIR%' -Force; $inner = Get-ChildItem -LiteralPath '%RDPRRAP_DIR%' -Directory -Filter 'rdprrap-*' | Select-Object -First 1; if ($inner) { Get-ChildItem -LiteralPath $inner.FullName -Force | Move-Item -Destination '%RDPRRAP_DIR%' -Force; Remove-Item -LiteralPath $inner.FullName -Recurse -Force } exit 0 } catch { Write-Error $_; exit 1 }"
+        if not errorlevel 1 set "RDPRRAP_EXTRACTED=1"
+        if not defined RDPRRAP_EXTRACTED (
+            echo [winpodx]   extract attempt %%T failed, retrying after 2s...
+            powershell -NoProfile -Command "Start-Sleep -Seconds 2"
+        )
+    )
+)
+if not defined RDPRRAP_EXTRACTED (
+    echo [winpodx] WARNING: rdprrap extraction failed after 3 attempts; staying single-session.
+    (echo extract-failed)>"%RDPRRAP_STATUS%"
     goto :rdprrap_done
 )
 
 set "RDPRRAP_EXE=%RDPRRAP_DIR%\rdprrap-installer.exe"
 if not exist "%RDPRRAP_EXE%" (
     echo [winpodx] WARNING: rdprrap-installer.exe missing after extract; staying single-session.
+    (echo extract-failed)>"%RDPRRAP_STATUS%"
     goto :rdprrap_done
 )
 
+REM --- Run installer with retries ------------------------------------------
+REM rdprrap-installer can transiently fail on first-boot due to Windows
+REM Update background tasks, antivirus init, or service startup races.
+REM Retry up to 3 times with backoff before giving up.
 echo [winpodx] Running rdprrap-installer...
-"%RDPRRAP_EXE%" install --skip-restart
-if errorlevel 1 (
-    echo [winpodx] WARNING: rdprrap-installer failed; staying single-session.
+set "RDPRRAP_INSTALLED_OK="
+for %%T in (1 2 3) do (
+    if not defined RDPRRAP_INSTALLED_OK (
+        "%RDPRRAP_EXE%" install --skip-restart
+        if not errorlevel 1 set "RDPRRAP_INSTALLED_OK=1"
+        if not defined RDPRRAP_INSTALLED_OK (
+            echo [winpodx]   installer attempt %%T failed, retrying after 3s...
+            powershell -NoProfile -Command "Start-Sleep -Seconds 3"
+        )
+    )
+)
+if not defined RDPRRAP_INSTALLED_OK (
+    echo [winpodx] WARNING: rdprrap-installer failed after 3 attempts; staying single-session.
+    (echo installer-failed)>"%RDPRRAP_STATUS%"
     goto :rdprrap_done
 )
 
@@ -248,8 +289,29 @@ echo [winpodx] Restarting TermService to activate rdprrap...
 net stop TermService /y >nul 2>&1
 net start TermService >nul 2>&1
 
+REM --- Verify activation ----------------------------------------------------
+REM rdprrap-installer reporting rc=0 doesn't guarantee the patch landed —
+REM observed cases where the binary completed but ServiceDll was never
+REM flipped (transient Defender hold, Sysprep-time registry race). Check
+REM HKLM\SYSTEM\CurrentControlSet\Services\TermService\Parameters\ServiceDll
+REM — if it ends in termwrap.dll the patch is live; if termsrv.dll, it isn't.
+echo [winpodx] Verifying rdprrap activation...
+set "RDPRRAP_SERVICEDLL="
+for /f "usebackq tokens=2,*" %%A in (`reg query "HKLM\SYSTEM\CurrentControlSet\Services\TermService\Parameters" /v ServiceDll 2^>nul ^| findstr /R "REG_EXPAND_SZ"`) do (
+    set "RDPRRAP_SERVICEDLL=%%B"
+)
+echo %RDPRRAP_SERVICEDLL% | findstr /I "termwrap" >nul 2>&1
+if errorlevel 1 (
+    echo [winpodx] WARNING: rdprrap installer ran but ServiceDll didn't flip to termwrap.dll.
+    echo [winpodx]   ServiceDll = %RDPRRAP_SERVICEDLL%
+    echo [winpodx]   Multi-session activation incomplete; staying single-session.
+    (echo not-activated)>"%RDPRRAP_STATUS%"
+    goto :rdprrap_done
+)
+
+(echo enabled)>"%RDPRRAP_STATUS%"
 (echo %RDPRRAP_VERSION%)>"%RDPRRAP_INSTALLED%"
-echo [winpodx] rdprrap %RDPRRAP_VERSION% installed (offline bundle).
+echo [winpodx] rdprrap %RDPRRAP_VERSION% installed and activated (ServiceDll = %RDPRRAP_SERVICEDLL%).
 goto :rdprrap_done
 
 :rdprrap_skip

@@ -264,12 +264,25 @@ def _apply_multi_session(cfg: Config) -> None:
         f"    Write-Output '{not_staged_msg}'",
         "    exit 0",
         "}",
-        # Existence-only probe — don't even invoke `--status` from runtime;
-        # rdprrap-conf can synchronously touch termsrv state and on a
-        # half-patched binary that has been observed to hang the agent.
-        # The mere presence of the binary is what `apply_windows_runtime_fixes`
-        # callers want to know about anyway.
-        'Write-Output ("rdprrap-conf staged at: $rdprrap")',
+        # Existence-only probe — don't invoke rdprrap-conf from runtime;
+        # it can synchronously touch termsrv state and has been observed to
+        # hang the agent on a half-patched binary. install.bat (OEM v15+)
+        # writes a status marker that we can read instead — never blocks,
+        # never restarts services. Markers: enabled / not-activated /
+        # extract-failed / installer-failed.
+        '$marker = "C:\\winpodx\\rdprrap\\.activation_status"',
+        "if (Test-Path $marker) {",
+        "    $status = (Get-Content -LiteralPath $marker"
+        " -ErrorAction SilentlyContinue | Select-Object -First 1)",
+        "    if ($status) {",
+        '        Write-Output ("rdprrap status: $status (rdprrap-conf at $rdprrap)")',
+        "        exit 0",
+        "    }",
+        "}",
+        # No marker — likely OEM v14 or earlier where install.bat didn't
+        # record activation state. The presence of rdprrap-conf is the
+        # only signal we have without invoking the binary.
+        'Write-Output ("rdprrap-conf staged at: $rdprrap (no activation marker; pre-OEM-v15)")',
         "exit 0",
     ]
     payload = "\n".join(payload_lines) + "\n"
