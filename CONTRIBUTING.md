@@ -73,6 +73,19 @@ test: add unit tests for UNC path conversion
 chore: update ruff to 0.8.x
 ```
 
+### No AI tool co-author trailers
+
+Do **not** add `Co-authored-by:` trailers that name AI tools / coding agents. This applies to all of:
+
+- `Co-authored-by: Cursor <cursoragent@cursor.com>`
+- `Co-authored-by: Claude <noreply@anthropic.com>` (and any other Anthropic email)
+- `Co-authored-by: Copilot <...>` (any GitHub Copilot variant)
+- `Co-authored-by: <any other AI tool / agent identity>`
+
+You wrote the patch — the human author of record is you. AI tooling doesn't get co-authorship credit in this repo regardless of how much it contributed. If you forgot and a trailer slipped in, we'll ask you to amend (or, for already-merged PRs, propose a coordinated history-rewrite via a follow-up PR).
+
+Human co-authors (e.g., a colleague who pair-programmed with you on the change) are fine and welcome — those should use real human identities + emails.
+
 ## Security
 
 If you discover a security vulnerability, please follow the process described in [SECURITY.md](SECURITY.md). **Do NOT open a public issue.**

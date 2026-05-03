@@ -73,6 +73,19 @@ test: add unit tests for UNC path conversion
 chore: update ruff to 0.8.x
 ```
 
+### AI 툴 co-author 트레일러 금지
+
+`Co-authored-by:` 트레일러에 AI 툴 / 코딩 에이전트 이름을 넣지 **마세요**. 다음 모두 해당:
+
+- `Co-authored-by: Cursor <cursoragent@cursor.com>`
+- `Co-authored-by: Claude <noreply@anthropic.com>` (및 다른 Anthropic 이메일)
+- `Co-authored-by: Copilot <...>` (GitHub Copilot 모든 변종)
+- `Co-authored-by: <기타 AI 툴 / 에이전트 정체성>`
+
+패치를 작성한 건 당신입니다 — 정식 사람 author 는 당신. AI 툴이 얼마나 기여했든 이 repo 에서 co-author credit 받지 않습니다. 깜빡하고 트레일러가 들어갔다면 amend 요청하거나 (이미 머지된 PR 의 경우) 후속 PR 로 조정된 history-rewrite 를 제안합니다.
+
+사람 co-author (예: 변경 사항을 함께 페어 프로그래밍한 동료) 는 환영 — 실제 사람 정체성 + 이메일 사용.
+
 ## 보안
 
 보안 취약점을 발견한 경우, [SECURITY.ko.md](SECURITY.ko.md)에 설명된 절차를 따라 주세요. **공개 이슈를 열지 마세요.**
