@@ -28,12 +28,69 @@ from winpodx.utils.paths import config_dir
 # content so a crafted or corrupted ``installed_version.txt`` cannot hang
 # the wizard or inject garbage into the version-comparison path.
 _MAX_MARKER_BYTES = 64
-_MARKER_VERSION_RE = re.compile(r"^\d+(\.\d+){0,3}[a-z0-9]*$")
+_MARKER_VERSION_RE = re.compile(r"^\d+(\.\d+){0,3}[a-zA-Z0-9.+_-]*$")
 
 # Per-version release highlights shown to users upgrading from an earlier
 # version. Add new entries at the top when cutting a release. Keep each
 # note user-facing, not developer-facing — three to six bullets max.
 _VERSION_NOTES: dict[str, list[str]] = {
+    "0.4.0": [
+        "Container image is now SHA-pinned. dockur's :latest push cadence no "
+        "longer triggers unsolicited container recreates -- updates are opt-in "
+        "via `winpodx setup --update-image`. Migrate auto-aligns existing pods "
+        "on upgrade (one ~30s recreate on next pod start, volume preserved -- "
+        "no ISO redownload).",
+        "No more PowerShell console flashes anywhere. WinpodxAgent and "
+        "WinpodxMedia HKCU\\Run entries both wrapped under wscript+"
+        "hidden-launcher.vbs; legacy flashing fallbacks removed; install.bat "
+        "ASCII-only so Windows Script Host doesn't choke on em-dashes; "
+        "install.bat's `reg add` replaced with PowerShell Set-ItemProperty so "
+        "cmd-quoting can't garble the registry value.",
+        "Fresh installs honestly wait for Windows. check_rdp_port now does a "
+        "real X.224 handshake instead of TCP-accept, so QEMU slirp accepting "
+        "forwards mid-ISO-download no longer fakes 'RDP port open'. "
+        "wait_for_windows_responsive returns True with a logged warning if "
+        "/health doesn't come up within 60s -- install.sh proceeds via FreeRDP "
+        "fallback instead of deadlocking phase 3 for the full 60-minute cap.",
+        "Multi-session activation is hands-free. `winpodx pod apply-fixes` and "
+        "migrate auto-activate rdprrap if it isn't already on; if ServiceDll "
+        "is already patched, the marker is reconciled without cycling "
+        "TermService (so the agent doesn't get killed for nothing). New "
+        "runtime activator rdprrap-activate.ps1 survives the TermService "
+        "restart it triggers; install.bat delegates to the same script for "
+        "OEM-time activation -- single source of truth.",
+        "App discovery is consistent across first-boot races. Guest-side "
+        "readiness gate (waits for AppXSvc + Start Menu .lnk count to "
+        "stabilize), host-side transport readiness (waits for agent /health "
+        "or RDP), and host-side retry-on-empty. Default discovery timeout "
+        "bumped 120s to 180s.",
+        "Discovery error classification fixed. ERRINFO_LOGOFF_BY_USER and "
+        "ERRINFO_RPC_INITIATED_DISCONNECT no longer mislabeled as 'Pod Not "
+        "Running' in the GUI -- new session_disconnected kind with a Retry "
+        "dialog instead of a misleading 'Start Pod' prompt.",
+        "install.sh more robust. install.bat's per-file copy now verifies + "
+        "writes diagnostics to C:\\winpodx\\setup.log; HKCU\\Run uses an "
+        "existence-gated PowerShell registration with a flash-but-working "
+        "fallback; install.bat ends by spawning the agent directly (HKCU\\Run "
+        "only fires once per logon, so registering it doesn't help the "
+        "current session).",
+        "SELinux + Fedora. `winpodx pod start` no longer fails with "
+        "lsetxattr: operation not permitted. The OEM bind mount now copies "
+        "into a user-owned ~/.config/winpodx/oem/ so Podman's :Z relabeling "
+        "works regardless of install method. bundle_dir() marker check "
+        "tightened from any() to all() so partial leftovers don't hijack "
+        "path resolution. (Thanks @pgarciaq.)",
+        "migrate works on RTM-suffixed pods (0.3.0-RTM1 etc.). Version parser "
+        "now extracts leading digits per dot-segment; previously 0.3.0-RTM1 "
+        "lex-compared less than 0.3.0, dropping the apply chain entirely.",
+        "New docs/LIFECYCLE.md (en + ko) -- end-to-end process reference "
+        "covering install, Sysprep, migrate, apply chain, multi-session "
+        "activation, image pinning, discovery, transport selection, and 7 "
+        "common recovery scenarios.",
+        "Contributing policy: AI-tool co-author trailers (Cursor, Claude, "
+        "Copilot, etc.) are now banned in commit messages. See "
+        "CONTRIBUTING.md.",
+    ],
     "0.3.1": [
         "Multi-session RDP auto-activates on `winpodx pod apply-fixes` "
         "(and migrate). The 'Select a session to reconnect to' dialog "
