@@ -1,3 +1,26 @@
+winpodx (0.4.4) unstable; urgency=medium
+
+  * Patch release. Restores real-time `pod wait-ready --logs` output that
+    was inadvertently buffered in v0.4.3 (the `tee` pipe added for
+    half-uninstalled-state diagnostics flipped Python's stdout to
+    4 KB-block-buffered; install.sh now prepends `PYTHONUNBUFFERED=1` to
+    the wait-ready invocation to force line-buffered output).
+  * Carry-over from the v0.4.3 dev cycle: half-uninstalled-state
+    self-heal in `winpodx setup --non-interactive`; cachyos rotate-
+    password / sync-password agent-first preference; codec-flag
+    allowlist correction (drop OPTIONAL-typed `+/-gfx-h264` etc. that
+    FreeRDP rejects); `winpodx app run --extra-args` per-launch escape
+    hatch; btrfs warning suppression in `wait-ready --logs`; dormant
+    Phase 1 foundations for the agent-first install + reverse-open
+    initiatives.
+  * Smoke-tested end-to-end on openSUSE Tumbleweed (2026-05-10):
+    Password sync OK via agent transport, apply chain via agent
+    transport, discovery 1-retry-deferred (normal), 56 apps in menu;
+    multi-session verified (qwinsta showed two active User sessions:
+    console + rdp-tcp#0).
+
+ -- Kim DaeHyun <kernalix7@kodenet.io>  Sun, 10 May 2026 13:30:00 +0000
+
 winpodx (0.4.3) unstable; urgency=medium
 
   * The btrfs Copy-on-Write fragmentation fix. Per-user storage bind mount
