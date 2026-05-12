@@ -240,39 +240,70 @@ def _split_mimes(value: str) -> list[str]:
     return [m.strip().lower() for m in value.split(";") if m.strip()]
 
 
+def _mimeapps_candidates() -> list[Path]:
+    """Return the per-user ``mimeapps.list`` paths in lookup order.
+
+    Per the freedesktop Associations spec:
+
+      1. ``$XDG_CONFIG_HOME/<desktop>-mimeapps.list`` — desktop-specific
+         override (`KDE-mimeapps.list`, `gnome-mimeapps.list`, …)
+      2. ``$XDG_CONFIG_HOME/mimeapps.list`` — primary user file
+      3. ``$XDG_DATA_HOME/applications/<desktop>-mimeapps.list`` —
+         older location some apps still write
+      4. ``$XDG_DATA_HOME/applications/mimeapps.list`` — legacy
+         fallback
+
+    Earlier entries shadow later ones; the caller merges by
+    "first definition wins".
+    """
+    cfg_home = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
+    data_home = os.environ.get("XDG_DATA_HOME") or os.path.join(
+        os.path.expanduser("~"), ".local", "share"
+    )
+    out: list[Path] = []
+    desktops = os.environ.get("XDG_CURRENT_DESKTOP", "")
+    for desktop in (p.strip() for p in desktops.split(":") if p.strip()):
+        out.append(Path(cfg_home) / f"{desktop.lower()}-mimeapps.list")
+    out.append(Path(cfg_home) / "mimeapps.list")
+    for desktop in (p.strip() for p in desktops.split(":") if p.strip()):
+        out.append(Path(data_home) / "applications" / f"{desktop.lower()}-mimeapps.list")
+    out.append(Path(data_home) / "applications" / "mimeapps.list")
+    return out
+
+
 def _read_default_handlers() -> dict[str, str]:
     """Read ``mimeapps.list`` for the user's per-MIME default handlers.
 
     The ``[Default Applications]`` section maps each MIME type to a
-    ``.desktop`` basename. We feed this back into :class:`LinuxApp` so
-    the listener can prefer the user's default over an alphabetically-
-    first co-handler.
+    ``.desktop`` basename. We walk the spec's full candidate list
+    (see :func:`_mimeapps_candidates`) and merge — first definition
+    wins, matching how `xdg-mime` itself resolves defaults.
     """
-    home = os.environ.get("XDG_CONFIG_HOME") or os.path.join(os.path.expanduser("~"), ".config")
-    path = Path(home) / "mimeapps.list"
-    if not path.is_file():
-        return {}
-    parser = configparser.ConfigParser(
-        interpolation=None,
-        strict=False,
-        delimiters=("=",),
-        comment_prefixes=("#",),
-    )
-    parser.optionxform = str
-    try:
-        parser.read(path, encoding="utf-8")
-    except configparser.Error:
-        return {}
-    if "Default Applications" not in parser:
-        return {}
-    out: dict[str, str] = {}
-    for mime, desktop in parser["Default Applications"].items():
-        # mimeapps.list allows ';'-separated lists. We only care about
-        # the first entry (the actual default).
-        first = desktop.split(";", 1)[0].strip()
-        if first:
-            out[mime.strip().lower()] = first
-    return out
+    merged: dict[str, str] = {}
+    for path in _mimeapps_candidates():
+        if not path.is_file():
+            continue
+        parser = configparser.ConfigParser(
+            interpolation=None,
+            strict=False,
+            delimiters=("=",),
+            comment_prefixes=("#",),
+        )
+        parser.optionxform = str
+        try:
+            parser.read(path, encoding="utf-8")
+        except configparser.Error:
+            continue
+        if "Default Applications" not in parser:
+            continue
+        for mime, desktop in parser["Default Applications"].items():
+            mime_key = mime.strip().lower()
+            if mime_key in merged:
+                continue  # earlier file shadows
+            first = desktop.split(";", 1)[0].strip()
+            if first:
+                merged[mime_key] = first
+    return merged
 
 
 def discover_apps(
