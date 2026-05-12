@@ -628,6 +628,29 @@ if [ -f "$HOME/.config/winpodx/winpodx.toml" ] && [ "${WINPODX_NO_DISCOVERY:-}" 
     fi
 fi
 
+# --- Reverse-open auto-setup ---
+# Linux apps in the Windows guest's "Open with..." menu (#48). The
+# feature ships default-on (cfg.reverse_open.enabled = True), so a
+# fresh install should produce a working menu without the user
+# having to know `winpodx host-open` exists. Two-step:
+#   1. Start the host-side listener daemon (idempotent — no-op if
+#      already running).
+#   2. `host-open refresh` — scans the host's .desktop entries,
+#      filters to Linux defaults, generates per-app ICOs, stages
+#      the manifest under ~/.local/share/winpodx/reverse-open/,
+#      and (if the agent is reachable) pushes everything to the
+#      guest where register-apps.ps1 writes the per-app
+#      Applications\winpodx-<slug>.cmd + Start Menu shortcuts.
+# Opt out via WINPODX_NO_REVERSE_OPEN=1 if the user wants to skip.
+if [ -f "$HOME/.config/winpodx/winpodx.toml" ] && [ "${WINPODX_NO_REVERSE_OPEN:-}" != "1" ]; then
+    log "Setting up reverse-open (Linux apps in Windows 'Open with')..."
+    "$HOME/.local/bin/winpodx" host-open start-listener 2>/dev/null || \
+        warn "  reverse-open listener didn't start; the feature will activate on next \`winpodx pod start\`"
+    if ! "$HOME/.local/bin/winpodx" host-open refresh 2>&1 | sed 's/^/  /'; then
+        warn "  reverse-open refresh failed; retry manually with \`winpodx host-open refresh\` once the pod is up"
+    fi
+fi
+
 unset WINPODX_REQUIRE_AGENT
 
 # Persist the pending list so resume_install_work() can pick it up.

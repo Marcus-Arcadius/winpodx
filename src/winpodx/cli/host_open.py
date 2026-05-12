@@ -535,6 +535,50 @@ def _cmd_stop_listener(args: argparse.Namespace) -> int:
     return 0
 
 
+def _cmd_unregister_guest(args: argparse.Namespace) -> int:
+    """Run guest-side unregister-apps.ps1 via the agent.
+
+    Used by ``uninstall.sh`` to scrub the per-app .cmd files, Start
+    Menu shortcuts, and registry entries from the Windows guest BEFORE
+    the container is torn down. Idempotent (the script no-ops if there
+    are no winpodx-* entries to remove).
+    """
+    cfg = Config.load()
+    try:
+        from winpodx.reverse_open.sync import SyncError, unregister_on_guest
+
+        result = unregister_on_guest(cfg)
+    except SyncError as exc:
+        if args.json:
+            json.dump({"ok": False, "error": str(exc)}, sys.stdout)
+            sys.stdout.write("\n")
+        else:
+            print(f"error: {exc}", file=sys.stderr)
+        return 1
+    except Exception as exc:  # noqa: BLE001
+        if args.json:
+            json.dump(
+                {"ok": False, "error": f"{exc.__class__.__name__}: {exc}"},
+                sys.stdout,
+            )
+            sys.stdout.write("\n")
+        else:
+            print(f"  agent unreachable or error: {exc.__class__.__name__}", file=sys.stderr)
+        return 1
+    if args.json:
+        json.dump(
+            {"ok": True, "stdout": result.stdout, "stderr": result.stderr},
+            sys.stdout,
+            indent=2,
+        )
+        sys.stdout.write("\n")
+    else:
+        print("reverse-open: guest registry scrubbed")
+        if result.stdout.strip():
+            print(f"  {result.stdout.strip()}")
+    return 0
+
+
 def _cmd_daemon_status(args: argparse.Namespace) -> int:
     pid = is_listener_running()
     paths = DaemonPaths.default()
@@ -621,6 +665,11 @@ def add_subcommand(top_subparsers: argparse._SubParsersAction) -> None:
     stop.add_argument("--json", action="store_true", help="Machine-readable output")
     dstat = sub.add_parser("daemon-status", help="Show whether the daemon is running")
     dstat.add_argument("--json", action="store_true", help="Machine-readable output")
+    ug = sub.add_parser(
+        "unregister-guest",
+        help="Run unregister-apps.ps1 on the guest to scrub Windows-side artifacts",
+    )
+    ug.add_argument("--json", action="store_true", help="Machine-readable output")
 
 
 def handle(args: argparse.Namespace) -> int:
@@ -644,6 +693,7 @@ def handle(args: argparse.Namespace) -> int:
         "start-listener": _cmd_start_listener,
         "stop-listener": _cmd_stop_listener,
         "daemon-status": _cmd_daemon_status,
+        "unregister-guest": _cmd_unregister_guest,
     }
     handler = handlers.get(cmd)
     if handler is None:
