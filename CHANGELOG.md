@@ -28,6 +28,15 @@ verbatim.
 ### Fixed
 -->
 
+## [0.5.2] - 2026-05-14
+
+Same-day install-path hot-fix release. Two `install.sh` regressions that blocked new installs on common 2025+ distros (Debian 13 Trixie, Ubuntu 24.10+) are fixed, and Atomic Fedora support lands as a single-transaction OBS-layered install path.
+
+### Highlights
+
+- **`install.sh` works again on Debian 13 / Ubuntu 24.10+** — the hardcoded `freerdp2-x11` dependency was unresolvable on those distros (only `freerdp3-x11` is in stock repos). The Debian/Ubuntu branch in `pkg_name()` now probes `apt-cache show` and picks `freerdp3-x11` when available, falling back to `freerdp2-x11` only on older systems. New users on Debian 13 / Ubuntu 24.10+ could not previously install at all. (reported by @basti189, #198)
+- **Atomic Fedora install path** (Silverblue / Kinoite / Sericea / Bluefin / Bazzite) via OBS `rpm-ostree install --apply-live` — single transaction, no per-package reboot loop. winpodx's RPM `Requires:` pulls FreeRDP / podman / python3 / tomli transitively, so layering just `winpodx` is enough. Falls back to staged install + reboot prompt if live apply is rejected by the booted deployment. (by @Zeik0s, #163)
+
 ### Added
 
 - **Atomic Fedora install support** (Silverblue / Kinoite / Sericea / Bluefin / Bazzite). `install.sh` autodetects `rpm-ostree` and switches to a single-transaction OBS-layered install instead of the per-package dnf loop: probes the OBS repo for the host's Fedora `VERSION_ID` (currently published: Fedora_42 / Fedora_43 / Fedora_44), drops the `.repo` file into `/etc/yum.repos.d/`, and runs `rpm-ostree install --apply-live --idempotent winpodx` to land the layer in the booted deployment without a reboot. If the running deployment can't accept the live apply (kernel/init-touching layers), staging falls back to `rpm-ostree install --idempotent winpodx` with a reboot prompt. winpodx's RPM `Requires: freerdp >= 3.0` + `python3-tomli` and `Recommends: podman` + `python3-PySide6` so layering just `winpodx` pulls everything transitively — no separate dependency list to maintain. README "Supported distros" gains an Atomic Fedora row and a Fedora Atomic Desktops "Works on" badge; `docs/INSTALL.md` documents the hand-install steps for users who'd rather skip `install.sh`. Korean mirrors updated. (by @Zeik0s, #163)
