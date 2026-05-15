@@ -47,26 +47,34 @@ jobs:
       - name: Install curl + jq
         run: sudo apt-get update && sudo apt-get install -y curl jq
 
+      - name: Probe whether OBS already has target version built
+        # Avoid triggering an unnecessary OBS rebuild when the target version
+        # is already published. A single rebuild costs ~30-60min on OBS shared
+        # infrastructure and is pure waste when the RPMs we'd download are
+        # byte-identical to what's already on the server. Probe a representative
+        # shipping repo (Tumbleweed) for a winpodx-<version>-*.rpm filename in
+        # the public download index; if found, OBS has the build cached.
+        #
+        # Works uniformly for both push (fresh tag — probe fails, we trigger)
+        # and workflow_dispatch (re-run on already-built tag — probe succeeds,
+        # we skip). If a fresh rebuild is genuinely needed (corrupted OBS
+        # cache), delete the noarch RPM via the OBS web UI then re-run the
+        # workflow, or push a new tag.
+        id: probe
+        run: |
+          version="${{ steps.tag.outputs.version }}"
+          listing_url="${OBS_DOWNLOAD}/openSUSE_Tumbleweed/noarch/"
+          html=$(curl -sS -f -L "$listing_url" 2>/dev/null || echo "")
+          if echo "$html" | grep -qE "winpodx-${version}-[0-9]+\.[0-9]+\.noarch\.rpm"; then
+            echo "OBS already has openSUSE_Tumbleweed RPM for v${version} — skipping runservice."
+            echo "skip_runservice=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "OBS doesn't yet have openSUSE_Tumbleweed RPM for v${version} — will trigger runservice."
+            echo "skip_runservice=false" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Trigger OBS service run (token)
-        # On tag push: OBS hasn't seen the new tag yet — `runservice` makes
-        # it re-fetch the source, generate a fresh tarball, and start a full
-        # rebuild across every (repo, arch) combination (~30-60 min on
-        # shared OBS infrastructure). That's the only path that produces
-        # RPMs for a fresh tag.
-        #
-        # On workflow_dispatch: we're re-running the workflow against a tag
-        # OBS has already built (e.g. to repopulate Release assets after a
-        # workflow-side fix). Triggering another full rebuild here is pure
-        # waste — the wait-loop downstream would sit through the entire
-        # rebuild even though the RPMs we'd end up downloading would be
-        # byte-identical. Skip the trigger so the wait-loop immediately
-        # observes the existing terminal state.
-        #
-        # If a re-dispatch genuinely does need a fresh rebuild (e.g. OBS
-        # has cached a broken build), set the OBS_FORCE_REBUILD environment
-        # at workflow level or click "Re-run all jobs" — the push-event
-        # branch above handles that flow already.
-        if: github.event_name == 'push'
+        if: steps.probe.outputs.skip_runservice == 'false'
         env:
           OBS_TOKEN: ${{ secrets.OBS_TOKEN }}
         run: |
@@ -78,76 +86,40 @@ jobs:
             -H "Authorization: Token $OBS_TOKEN" \
             "$OBS_API/trigger/runservice?project=$OBS_PROJECT&package=$OBS_PACKAGE"
 
-      - name: Skip OBS service trigger (workflow_dispatch)
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          echo "workflow_dispatch — assuming OBS already has ${{ steps.tag.outputs.tag }} built."
-          echo "If you need a forced rebuild, push a new tag or click 'Re-run all jobs' on the original tag-push run."
-
-      - name: Wait for OBS build to finish
+      - name: Wait for OBS shipping repos to finish
+        # Exit as soon as the repos we actually ship are in a terminal-OK
+        # state. Niche-arch noise (RISCV, Factory PowerPC, Slowroll aarch64)
+        # stuck on `blocked`/`broken` indefinitely is ignored — we don't ship
+        # those. Shipping repos: Tumbleweed, Leap 15.6, Leap 16.0, Slowroll,
+        # Fedora 42 / 43 / 44. Reduces the wait from "wait for every (repo,
+        # arch) combination in the project" to "wait for the seven we ship."
         run: |
           deadline=$(( $(date +%s) + 60 * 60 ))
-          sleep 30
+          sleep 15
           while :; do
             now=$(date +%s)
             if [ "$now" -ge "$deadline" ]; then
-              echo "Timed out waiting for OBS build" >&2
+              echo "Timed out waiting for OBS shipping repos" >&2
               curl -sS "$OBS_PUBLIC_API/build/$OBS_PROJECT/_result?package=$OBS_PACKAGE" || true
               exit 1
             fi
 
             xml=$(curl -sS -f "$OBS_PUBLIC_API/build/$OBS_PROJECT/_result?package=$OBS_PACKAGE" || true)
             if [ -z "$xml" ]; then
-              sleep 20
+              sleep 15
               continue
             fi
 
-            # Only look at per-package <status package="winpodx" code="..."/>.
-            # Repo-level <result ... code="broken"> (e.g. "nothing provides rpm"
-            # on Factory PowerPC/Slowroll aarch64) is OBS infrastructure noise
-            # that must not fail our publish job.
-            codes=$(echo "$xml" \
-              | grep -oP '<status package="winpodx"[^>]*code="\K[^"]+' \
-              | sort -u | tr '\n' ' ')
-            echo "current package codes: $codes"
-
-            if [ -z "$codes" ]; then
-              sleep 30
-              continue
-            fi
-
-            # `blocked` removed from the pending list: OBS leaves niche
-            # arches (e.g. openSUSE_Factory_RISCV riscv64) in `blocked` state
-            # indefinitely while waiting on deps that never resolve on that
-            # arch. We don't ship RISCV / Factory PowerPC / niche arches, so
-            # waiting for them is pointless — the download step only fetches
-            # RPMs that actually built. Mirror the `broken` handling below.
-            pending=$(echo " $codes " | grep -oE ' (scheduled|dispatching|building|signing|finished) ' || true)
-            if [ -n "$pending" ]; then
-              sleep 30
-              continue
-            fi
-
-            # `broken` shows up at the per-package level when OBS hits a
-            # repo-level "unresolvable preinstalls: nothing provides rpm"
-            # condition on niche archs (Slowroll aarch64, Factory PowerPC
-            # ppc64, etc.). The package itself isn't broken — OBS just
-            # can't bootstrap a buildroot for that arch. Treat `broken` as
-            # infrastructure noise and only fail on `failed` (actual build
-            # failure) or `unresolvable` (real dependency mismatch). The
-            # repos we actually ship will still publish.
-            failed=$(echo " $codes " | grep -oE ' (failed|unresolvable) ' || true)
-            if [ -n "$failed" ]; then
-              echo "OBS build has package-level failures:" >&2
-              echo "$xml" >&2
-              exit 1
-            fi
-            broken_only=$(echo " $codes " | grep -oE ' broken ' || true)
-            if [ -n "$broken_only" ]; then
-              echo "Note: some archs/repos returned 'broken' (OBS infra noise — ignored):" >&2
-              echo "$xml" >&2
-            fi
-            break
+            set +e
+            report=$(echo "$xml" | python3 scripts/ci/obs_check_shipping.py)
+            rc=$?
+            set -e
+            echo "$report"
+            case $rc in
+              0) echo "All shipping repos ready — proceeding to download."; break ;;
+              1) echo "Failure in one or more shipping repos." >&2; exit 1 ;;
+              *) sleep 30; continue ;;
+            esac
           done
 
       - name: Discover repos and download RPMs
