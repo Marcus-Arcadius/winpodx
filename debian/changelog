@@ -1,3 +1,33 @@
+winpodx (0.5.3) unstable; urgency=medium
+
+  * Compose up/down timeout is now pull-friendly (#212, reported by
+    @jimed-rand). Default `podman-compose up -d` / `down` timeout
+    bumped 120s → 1800s; honors `WINPODX_COMPOSE_TIMEOUT_SECS` env
+    var (`0` = no cap). First-time Windows image pulls on slow links
+    no longer trip the 120s wall.
+  * Launch surfaces FreeRDP stderr on quick-exit (#213 reported by
+    @mozjacksson, #214 reported by @ismikes). `launch_app` polls the
+    process 500 ms after spawn and raises `FreeRDP exited
+    immediately with rc=...` with the stderr log path; eliminates
+    the silent "launched but no window" failure mode on Plasma 6 /
+    Wayland and Python 3.14 hosts.
+  * Ubuntu 26.04 packaging + Python 3.14 in the CI matrix (#206).
+    Closes the untested-platform gap that surfaced #213 / #214.
+  * Windows language / region / keyboard configuration (by @juampe,
+    #201). New `[pod] language / region / keyboard` keys in
+    `winpodx.toml`; defaults stay `English` / `en-001` / `en-US`.
+    All three fields run through the same YAML-injection sanitiser
+    as `user` / `password` / `home`.
+  * LICENSE / README ship to `/usr/share/winpodx/` in the `.deb`
+    (by @juampe, #201). GUI License tab no longer hits
+    `FileNotFoundError` on Debian/Ubuntu installs.
+  * Dynamic desktop resolution: desktop sessions resize to the
+    FreeRDP client window size by default (by @Zeik0s, #197).
+  * Qt stylesheet parser warnings at GUI startup silenced
+    (by @juampe, #203).
+
+ -- Kim DaeHyun <kernalix7@kodenet.io>  Tue, 19 May 2026 14:00:00 +0000
+
 winpodx (0.5.2) unstable; urgency=medium
 
   * install.sh: pick freerdp3-x11 over freerdp2-x11 when available

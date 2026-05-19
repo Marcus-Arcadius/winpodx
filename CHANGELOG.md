@@ -28,6 +28,22 @@ verbatim.
 ### Fixed
 -->
 
+## [0.5.3] - 2026-05-19
+
+User-report follow-up release. Fixes slow-link compose timeout (#212), eliminates the silent "launched but no window" failure mode that #213 / #214 surfaced, lands Ubuntu 26.04 packaging + Python 3.14 in the CI matrix (#206), Windows language / region / keyboard configurability (#201), and the dynamic desktop resolution feature (#197).
+
+### Highlights
+
+**Pull-friendly compose timeout, visible FreeRDP launch errors, Ubuntu 26.04 + Python 3.14 in CI.** First-time Windows image pulls on slow internet no longer trip the 120s wall; silent FreeRDP failures now print the stderr log path; the untested-platform gap that produced #213 / #214 is closed.
+
+- `podman-compose up -d` / `down` default timeout 120s → 1800s; honors `WINPODX_COMPOSE_TIMEOUT_SECS` (`0` = no cap). Fixes #212.
+- `launch_app` polls FreeRDP 500 ms after spawn and raises `FreeRDP exited immediately with rc=...` with the stderr log path. Fixes #213 / #214.
+- Ubuntu 26.04 packaging + Python 3.14 in the CI matrix. Closes the untested-platform gap behind #213 / #214 (#206).
+- Windows `[pod] language / region / keyboard` keys; same YAML-injection hardening as `user` / `password` / `home` (#201).
+- Desktop sessions now resize dynamically to the FreeRDP client window size (#197).
+- LICENSE / README ship to `/usr/share/winpodx/` in the `.deb`; GUI License tab works again on Debian/Ubuntu (#201).
+- Qt stylesheet parser warnings at GUI startup silenced (#203).
+
 ### Added
 
 - **Windows language / region / keyboard configuration.** The pod's installation language, regional format, and keyboard layout are now configurable via `[pod] language / region / keyboard` in `winpodx.toml`. Defaults to `English` / `en-001` / `en-US` (backward compatible with existing configs); set to e.g. `Spanish` / `es-ES` / `es-ES` for a Spanish Windows install. All three fields run through `_DANGEROUS_YAML_CHARS` sanitisation in `PodConfig.__post_init__` and `_yaml_escape` at compose render — same defense-in-depth as the existing `user` / `password` / `home` fields. `docs/INSTALL.md` and `docs/INSTALL.ko.md` document the 10 most common language tuples. Applies only to fresh Windows installations; existing pods need a volume reset + `winpodx setup` re-run. (by @juampe, #201)
