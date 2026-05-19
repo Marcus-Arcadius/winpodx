@@ -9,6 +9,10 @@ on:
       tag:
         description: "Release tag to attach RPMs to (e.g. v0.1.0)"
         required: true
+      force:
+        description: "Force OBS runservice even if Tumbleweed RPM exists (use when source bumped without version change)"
+        required: false
+        default: "false"
 
 env:
   OBS_PROJECT: home:Kernalix7
@@ -63,6 +67,11 @@ jobs:
         id: probe
         run: |
           version="${{ steps.tag.outputs.version }}"
+          if [ "${{ inputs.force }}" = "true" ]; then
+            echo "force=true requested — bypassing Tumbleweed RPM probe and triggering runservice."
+            echo "skip_runservice=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           listing_url="${OBS_DOWNLOAD}/openSUSE_Tumbleweed/noarch/"
           html=$(curl -sS -f -L "$listing_url" 2>/dev/null || echo "")
           if echo "$html" | grep -qE "winpodx-${version}-[0-9]+\.[0-9]+\.noarch\.rpm"; then
