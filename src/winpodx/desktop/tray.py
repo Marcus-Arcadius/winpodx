@@ -338,11 +338,18 @@ def run_tray() -> None:
 
         bus = QDBusConnection.systemBus()
         if bus.isConnected():
+            # PySide6's QDBusConnection.connect requires the 6-arg overload
+            # (service, path, interface, name, signature, slot). The signal
+            # we want -- ``PrepareForSleep(b)`` -- emits a single boolean.
+            # The 5-arg shape compiled fine but crashed at runtime with
+            # ``TypeError: connect expected at least 6 arguments, got 5``
+            # on the user's PySide6.
             ok = bus.connect(
                 "org.freedesktop.login1",
                 "/org/freedesktop/login1",
                 "org.freedesktop.login1.Manager",
                 "PrepareForSleep",
+                "b",
                 _on_prepare_for_sleep,
             )
             if not ok:
@@ -357,6 +364,13 @@ def run_tray() -> None:
         # 30 s status poll still catches resume eventually -- D-Bus is
         # the fast path, not the only path.
         log.debug("PySide6.QtDBus not available; skipping sleep listener")
+    except TypeError as e:
+        # Defensive: if a future PySide6 changes the overload shape again,
+        # log + degrade to the 30 s poll instead of crashing the tray.
+        log.warning(
+            "QDBus PrepareForSleep subscribe failed (%s); tray will rely on the 30 s poll.",
+            e,
+        )
 
     import threading
 
