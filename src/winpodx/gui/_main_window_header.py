@@ -86,14 +86,26 @@ class HeaderMixin:
 
         icon_path = bundled_data_path("winpodx-icon.svg")
         if icon_path is not None:
+            from PySide6.QtCore import QRectF
+
             renderer = QSvgRenderer(str(icon_path))
-            pixmap = QPixmap(QSize(28, 24))
+            size = 24
+            pixmap = QPixmap(size, size)
             pixmap.fill(Qt.GlobalColor.transparent)
             painter = QPainter(pixmap)
-            renderer.render(painter)
+            # Preserve the icon's aspect ratio inside a square box -- rendering
+            # a square logo into a 28x24 pixmap stretched it horizontally
+            # ("the logo looks squished"). Fit + center instead.
+            ds = renderer.defaultSize()
+            if ds.width() > 0 and ds.height() > 0:
+                scale = min(size / ds.width(), size / ds.height())
+                w, h = ds.width() * scale, ds.height() * scale
+                renderer.render(painter, QRectF((size - w) / 2, (size - h) / 2, w, h))
+            else:
+                renderer.render(painter)
             painter.end()
             logo_btn.setIcon(QIcon(pixmap))
-            logo_btn.setIconSize(QSize(28, 24))
+            logo_btn.setIconSize(QSize(size, size))
 
         layout.addWidget(logo_btn)
 
@@ -111,13 +123,13 @@ class HeaderMixin:
             (tr("License"), 6, "diamond"),
         ]
 
+        # Navigation lives entirely in the gear overflow menu now. We do NOT
+        # create per-page QPushButtons: the old top tab bar is gone, and an
+        # un-laid-out QPushButton(parent=self) renders as a stray box at (0,0)
+        # over the logo (the "License" ghost bug). nav_buttons stays empty for
+        # back-compat; _switch_page / shortcuts drive off nav_menu_actions.
         nav_menu = QMenu(self)
         for row, (label, idx, icon_name) in enumerate(nav_items):
-            btn = QPushButton(label, self)
-            btn.setCheckable(True)
-            btn.clicked.connect(lambda _, i=idx: self._switch_page(i))
-            self.nav_buttons.append(btn)
-
             action = nav_menu.addAction(load_icon(icon_name, C.SUBTEXT1, 16), label)
             action.setCheckable(True)
             action.triggered.connect(lambda _checked=False, i=idx: self._switch_page(i))
@@ -125,7 +137,6 @@ class HeaderMixin:
             if row == 0:
                 nav_menu.addSeparator()
 
-        self.nav_buttons[0].setChecked(True)
         self.nav_menu_actions[0].setChecked(True)
         layout.addStretch()
 

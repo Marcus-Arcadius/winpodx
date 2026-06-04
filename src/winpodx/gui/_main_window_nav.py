@@ -38,10 +38,13 @@ class NavigationMixin:
 
     def _switch_page(self, index: int) -> None:
         self.pages.setCurrentIndex(index)
-        for i, btn in enumerate(self.nav_buttons):
-            btn.setChecked(i == index)
         for i, action in enumerate(getattr(self, "nav_menu_actions", [])):
             action.setChecked(i == index)
+
+        # Refresh the Home launcher's "Running" live-session strip whenever Home
+        # is opened so it reflects what's actually running.
+        if index == 0 and hasattr(self, "_refresh_running_strip"):
+            self._refresh_running_strip()
         # v0.5.1: tail processes are now always-on (started at
         # WinpodxWindow.__init__) and feed both the Terminal full
         # history AND the always-visible bottom log bar. We no
@@ -84,7 +87,7 @@ class NavigationMixin:
             return
         self._shortcuts_installed = True
 
-        for i, _btn in enumerate(self.nav_buttons):
+        for i in range(len(getattr(self, "nav_menu_actions", []))):
             sc = QShortcut(QKeySequence(f"Alt+{i + 1}"), self)
             sc.activated.connect(lambda idx=i: self._switch_page(idx))
 
