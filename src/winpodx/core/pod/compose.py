@@ -280,6 +280,19 @@ def _qemu_arguments_for_host(cfg: Config | None = None) -> str:
     if cfg.pod.disguise_active and platform.machine() != "aarch64":
         extra_args += _disguise_smbios_args()
 
+    # Synthetic-sensor SSDT (#246): inject a thermal zone so the guest exposes
+    # MSAcpi_ThermalZoneTemperature / ThermalZoneInformation (al-khaser's
+    # Current-Temperature / ThermalZoneInfo probes). The compiled AML ships only
+    # inside the patched-QEMU disguise image, so gate on that image being in use
+    # (max + disguise_image set) -- otherwise the file wouldn't exist and QEMU
+    # would abort on boot.
+    if cfg.pod.disguise_max and cfg.pod.disguise_image and platform.machine() != "aarch64":
+        extra_args += ["-acpitable", "file=/usr/share/qemu/winpodx-ssdt-sensors.aml"]
+        # WSMT (Windows SMM Security Mitigations Table): al-khaser flags its
+        # absence; QEMU never emits one, so inject the synthetic one baked into
+        # the disguise image.
+        extra_args += ["-acpitable", "file=/usr/share/qemu/winpodx-wsmt.aml"]
+
     return " ".join(extra_args)
 
 
@@ -302,6 +315,55 @@ def _host_dmi_field(name: str) -> str | None:
     if not val or not all(c.isalnum() or c in "._/+-" for c in val):
         return None
     return val
+
+
+def _smbios_safe(val: str | None) -> str | None:
+    """Collapse a host string to a space-free, shell/comma-safe SMBIOS token.
+
+    dockur splits its ``ARGUMENTS`` env on spaces and ``-smbios`` is
+    comma-delimited, so a value may carry no space, comma, ``=`` or quote. A
+    space becomes ``-`` (so a multi-word model keeps its shape) and any other
+    unsafe character is dropped, mirroring ``_host_dmi_field``'s safe set.
+    """
+    if not val:
+        return None
+    out: list[str] = []
+    for c in val:
+        if c.isalnum() or c in "._/+-":
+            out.append(c)
+        elif c == " ":
+            out.append("-")
+    token = "".join(out).strip("-")
+    while "--" in token:
+        token = token.replace("--", "-")
+    return token or None
+
+
+def _host_cpu_smbios() -> tuple[str | None, str | None]:
+    """Read the host CPU vendor + model from ``/proc/cpuinfo`` for SMBIOS type 4.
+
+    QEMU's default type-4 (processor) structure reports ``QEMU`` as the
+    manufacturer and the machine type (``pc-q35-…``) as the version;
+    al-khaser's ``qemu_firmware_SMBIOS`` flags the literal ``QEMU`` anywhere in
+    the SMBIOS. Returns ``(manufacturer, version)`` from the CPU's vendor string
+    (``GenuineIntel`` / ``AuthenticAMD``) and marketing model name -- values that
+    millions of machines share, so they are not host-identifying (like the disk
+    model, never a serial / UUID). Either element is ``None`` when unreadable.
+    """
+    vendor: str | None = None
+    model: str | None = None
+    try:
+        text = Path("/proc/cpuinfo").read_text(encoding="utf-8")
+    except OSError:
+        return None, None
+    for line in text.splitlines():
+        if vendor is None and line.startswith("vendor_id"):
+            vendor = line.split(":", 1)[1].strip()
+        elif model is None and line.startswith("model name"):
+            model = line.split(":", 1)[1].strip()
+        if vendor and model:
+            break
+    return _smbios_safe(vendor), _smbios_safe(model)
 
 
 def _disguise_smbios_args() -> list[str]:
@@ -348,6 +410,18 @@ def _disguise_smbios_args() -> list[str]:
         args += ["-smbios", "type=2," + ",".join(t2)]
     if chassis_vendor:
         args += ["-smbios", f"type=3,manufacturer={chassis_vendor}"]
+    # Type 4 (Processor): QEMU defaults to manufacturer "QEMU" + version
+    # "pc-q35-<ver>", both VM tells (al-khaser's qemu_firmware_SMBIOS flags the
+    # literal "QEMU"). Override with the host CPU's vendor + model so the
+    # processor structure reads as a real CPU.
+    cpu_manufacturer, cpu_version = _host_cpu_smbios()
+    t4 = []
+    if cpu_manufacturer:
+        t4.append(f"manufacturer={cpu_manufacturer}")
+    if cpu_version:
+        t4.append(f"version={cpu_version}")
+    if t4:
+        args += ["-smbios", "type=4," + ",".join(t4)]
     return args
 
 

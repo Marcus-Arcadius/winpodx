@@ -50,6 +50,50 @@ echo "  ACPI OEM6='${ACPI_OEM6}' OEM8='${ACPI_OEM8}' DISK='${DISK_MODEL}' DVD='$
 sed -i "s/\"BOCHS \"/\"${ACPI_OEM6}\"/g" include/hw/acpi/aml-build.h
 sed -i "s/\"BXPC    \"/\"${ACPI_OEM8}\"/g" include/hw/acpi/aml-build.h
 
+# --- FADT rev6 "Hypervisor Vendor Identity" ---
+# build_fadt() hardcodes the 8-byte Hypervisor Vendor Identity field to "QEMU"
+# (hw/acpi/aml-build.c). al-khaser's "ACPI table strings" scan reads the FADT
+# and flags that literal even after the OEM ID is changed. Rewrite it to the
+# host vendor (a non-VM string) so the FADT no longer announces a hypervisor.
+HV_ID="$(printf '%s' "$ACPI_OEM6" | tr -d ' ' | cut -c1-8)"
+[ -n "$HV_ID" ] || HV_ID="ALASKA"
+sed -i "s/build_append_padded_str(tbl, \"QEMU\", 8/build_append_padded_str(tbl, \"${HV_ID}\", 8/" \
+    hw/acpi/aml-build.c
+
+# --- FADT Preferred_PM_Profile (FADT offset 45) ---
+# build_fadt() writes byte 45 as 0x00 ("Unspecified"). al-khaser's
+# qemu_firmware_ACPI() flags any guest whose FADT byte 45 == 0x00 as the
+# hardcoded QEMU value -- a byte check, NOT a string match, so the OEM/HV-vendor
+# patches above never clear it. A real laptop reports 0x02 (Mobile); set it so
+# the field stops reading as the QEMU default. (The PM Profile is an OS power
+# hint, not a constraint, so Windows behaviour is unchanged.)
+sed -i 's|build_append_int_noprefix(tbl, 0 /\* Unspecified \*/, 1);|build_append_int_noprefix(tbl, 2 /* Mobile (winpodx) */, 1);|' \
+    hw/acpi/aml-build.c
+
+# --- ACPI device _HID strings (QEMU* -> host vendor prefix) ---
+# fw_cfg ("QEMU0002"), pvpanic ("QEMU0001") and vmgenid ("QEMUVGID") declare
+# _HIDs that land verbatim in the DSDT; al-khaser's ACPI-table scan flags the
+# "QEMU" prefix. The vmgenid _HID is also what Windows binds
+# \Device\VmGenerationCounter to (a VM/Hyper-V tell), so renaming it drops that
+# device too. Windows has no driver for fw_cfg / pvpanic, so renaming their
+# _HIDs is cosmetic. Use a 4-char vendor prefix derived from the host (valid
+# ACPI ID form: leading letter), falling back to a neutral non-VM default.
+HID4="$(printf '%s' "$ACPI_OEM6" | tr -cd 'A-Za-z0-9' | tr 'a-z' 'A-Z' | cut -c1-4)"
+case "$HID4" in [A-Z]???) : ;; *) HID4="ACPI" ;; esac
+sed -i "s/aml_string(\"QEMU0002\")/aml_string(\"${HID4}0002\")/" \
+    hw/nvram/fw_cfg-acpi.c hw/i386/fw_cfg.c
+sed -i "s/aml_string(\"QEMU0001\")/aml_string(\"${HID4}0001\")/" hw/misc/pvpanic-isa.c
+sed -i "s/aml_string(\"QEMUVGID\")/aml_string(\"${HID4}VGID\")/" hw/acpi/vmgenid.c
+
+# --- WAET table signature ---
+# QEMU emits a WAET ("Windows ACPI Emulated devices Table") -- a table only
+# present under emulation, which al-khaser's ACPI check enumerates as a VM tell.
+# Rename its 4-byte signature so it's no longer the recognised WAET (Windows
+# ignores the now-unknown table; we lose only WAET's RTC/PM-timer read hint).
+# Done via the signature, not by dropping the call -- that would leave
+# build_waet() unused and fail QEMU's -Werror build.
+sed -i 's/\.sig = "WAET"/.sig = "WAFT"/' hw/i386/acpi-build.c
+
 # --- Disk / optical model strings ---
 # ATA (ide-hd, used by DISK_TYPE=sata) + SCSI defaults report "QEMU HARDDISK"
 # / "QEMU DVD-ROM"; al-khaser scans Disk\Enum + IDE/SCSI for "QEMU".
@@ -57,4 +101,17 @@ sed -i "s/\"QEMU HARDDISK\"/\"${DISK_MODEL}\"/g" hw/ide/core.c hw/scsi/scsi-disk
 sed -i "s/\"QEMU DVD-ROM\"/\"${DVD_MODEL}\"/g" hw/ide/core.c hw/ide/atapi.c
 sed -i "s/\"QEMU CD-ROM\"/\"${DVD_MODEL}\"/g" hw/scsi/scsi-disk.c
 
-echo "winpodx: identity-string patch applied (ACPI OEM + disk model)."
+# --- ATAPI / SCSI INQUIRY vendor field ("QEMU") ---
+# Separate from the product/model patched above. hw/ide/atapi.c sets the 8-byte
+# SCSI-INQUIRY vendor to "QEMU" (the optical drive then reports Ven_QEMU in
+# Enum\SCSI + DEVICEMAP\Scsi, which al-khaser's registry_disk_enum + DEVICEMAP
+# checks flag), and hw/scsi/scsi-disk.c defaults s->vendor to "QEMU". The ATA
+# disk is unaffected (its vendor is parsed from the IDENTIFY model, already
+# patched). Set the optical vendor to the first token of DVD_MODEL (a real
+# drive vendor) and the generic SCSI vendor to "ATA" (QEMU's own T10 default).
+DVD_VENDOR="$(printf '%s' "$DVD_MODEL" | awk '{print $1}')"
+[ -n "$DVD_VENDOR" ] || DVD_VENDOR="ASUS"
+sed -i "s/padstr8(buf + 8, 8, \"QEMU\")/padstr8(buf + 8, 8, \"${DVD_VENDOR}\")/" hw/ide/atapi.c
+sed -i "s/s->vendor = g_strdup(\"QEMU\")/s->vendor = g_strdup(\"ATA\")/" hw/scsi/scsi-disk.c
+
+echo "winpodx: identity-string patch applied (ACPI OEM + FADT HV vendor + _HIDs + WAET + disk model + INQUIRY vendor)."
