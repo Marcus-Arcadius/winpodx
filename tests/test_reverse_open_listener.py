@@ -122,9 +122,62 @@ def test_validate_schema_rejects_non_object() -> None:
 
 def test_validate_schema_rejects_wrong_version() -> None:
     err = _validate_schema(
-        {"version": 2, "app": "kate", "path": "\\\\tsclient\\home\\x", "ts": "t"}
+        {"version": 99, "app": "kate", "path": "\\\\tsclient\\home\\x", "ts": "t"}
     )
     assert err and "version" in err
+
+
+def test_validate_schema_accepts_v2_host_origin() -> None:
+    err = _validate_schema(
+        {
+            "version": 2,
+            "app": "kate",
+            "path": "\\\\tsclient\\home\\x",
+            "origin": "host",
+            "ts": "t",
+        }
+    )
+    assert err is None
+
+
+def test_validate_schema_accepts_v2_guest_drive_path() -> None:
+    err = _validate_schema(
+        {
+            "version": 2,
+            "app": "kate",
+            "path": "C:\\Users\\me\\Desktop\\x.txt",
+            "origin": "guest",
+            "ts": "t",
+        }
+    )
+    assert err is None
+
+
+def test_validate_schema_rejects_guest_origin_with_unc_path() -> None:
+    # origin=guest must carry a drive path, not a \\tsclient\ UNC.
+    err = _validate_schema(
+        {
+            "version": 2,
+            "app": "kate",
+            "path": "\\\\tsclient\\home\\x",
+            "origin": "guest",
+            "ts": "t",
+        }
+    )
+    assert err and "guest path" in err
+
+
+def test_validate_schema_rejects_bad_origin() -> None:
+    err = _validate_schema(
+        {
+            "version": 2,
+            "app": "kate",
+            "path": "\\\\tsclient\\home\\x",
+            "origin": "elsewhere",
+            "ts": "t",
+        }
+    )
+    assert err and "origin" in err
 
 
 def test_validate_schema_rejects_bad_slug() -> None:
@@ -236,6 +289,108 @@ def test_process_pending_rejects_unknown_app(
     listener.process_pending()
     stats = listener.stats_snapshot()
     assert stats.rejected_unknown_app == 1
+    assert captured == []
+
+
+def test_process_pending_rejects_guest_origin_until_mount(
+    tmp_path: Path, home_under_tmp: Path, spawn_capture: tuple
+) -> None:
+    # origin="guest" (a guest-local C:\ file) is schema-valid but the
+    # guest-disk mount isn't wired up yet (#616), so it must be rejected
+    # cleanly — NOT spawned, NOT mis-resolved as a host path.
+    captured, spawn = spawn_capture
+    inc = _incoming(tmp_path)
+    inc.chmod(0o700)
+    _write_request(
+        inc,
+        {
+            "version": 2,
+            "app": "kate",
+            "path": "C:\\Users\\me\\Desktop\\note.txt",
+            "origin": "guest",
+            "ts": "2026-06-19T00:00:00Z",
+            "pod_id": None,
+        },
+    )
+    cfg = ListenerConfig(incoming_dir=inc, share_roots={"home": home_under_tmp})
+    apps_db = _apps_db_with("kate", ["/usr/bin/kate", "%f"])
+    listener = Listener(cfg, apps_db, _seen(tmp_path), spawn=spawn)
+    listener.process_pending()
+    stats = listener.stats_snapshot()
+    assert stats.rejected_guest_unsupported == 1
+    assert stats.accepted == 0
+    assert captured == []
+
+
+def test_process_pending_opens_guest_file_via_mount(tmp_path: Path, spawn_capture: tuple) -> None:
+    # With a guest_mount resolver pointing at the host SMB mount of guest C:,
+    # an origin="guest" request opens the translated file (#616).
+    captured, spawn = spawn_capture
+    inc = _incoming(tmp_path)
+    inc.chmod(0o700)
+    mount = tmp_path / "gvfs-guest-c"
+    target = mount / "Users" / "me" / "Desktop" / "note.txt"
+    target.parent.mkdir(parents=True)
+    target.write_text("data", encoding="utf-8")
+    _write_request(
+        inc,
+        {
+            "version": 2,
+            "app": "kate",
+            "path": "C:\\Users\\me\\Desktop\\note.txt",
+            "origin": "guest",
+            "ts": "2026-06-19T00:00:00Z",
+            "pod_id": None,
+        },
+    )
+    cfg = ListenerConfig(
+        incoming_dir=inc,
+        share_roots={"home": tmp_path},
+        guest_mount=lambda: mount,
+    )
+    apps_db = _apps_db_with("kate", ["/usr/bin/kate", "%f"])
+    listener = Listener(cfg, apps_db, _seen(tmp_path), spawn=spawn)
+    listener.process_pending()
+
+    stats = listener.stats_snapshot()
+    assert stats.accepted == 1
+    assert stats.rejected_guest_unsupported == 0
+    assert len(captured) == 1
+    argv, _ = captured[0]
+    assert argv[0] == "/usr/bin/kate"
+    assert argv[1] == str(target)
+
+
+def test_process_pending_guest_rejects_when_mount_unavailable(
+    tmp_path: Path, spawn_capture: tuple
+) -> None:
+    # Resolver returns None (guest disk unreachable) -> clean reject, no spawn.
+    captured, spawn = spawn_capture
+    inc = _incoming(tmp_path)
+    inc.chmod(0o700)
+    _write_request(
+        inc,
+        {
+            "version": 2,
+            "app": "kate",
+            "path": "C:\\Users\\me\\x.txt",
+            "origin": "guest",
+            "ts": "2026-06-19T00:00:00Z",
+            "pod_id": None,
+        },
+    )
+    cfg = ListenerConfig(
+        incoming_dir=inc,
+        share_roots={"home": tmp_path},
+        guest_mount=lambda: None,
+    )
+    apps_db = _apps_db_with("kate", ["/usr/bin/kate", "%f"])
+    listener = Listener(cfg, apps_db, _seen(tmp_path), spawn=spawn)
+    listener.process_pending()
+
+    stats = listener.stats_snapshot()
+    assert stats.accepted == 0
+    assert stats.rejected_path == 1
     assert captured == []
 
 

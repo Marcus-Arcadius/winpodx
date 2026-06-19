@@ -66,7 +66,12 @@ from winpodx.reverse_open.seen_uuids import SeenUUIDs
 log = logging.getLogger(__name__)
 
 
-_VERSION = 1
+# Accepted request schema versions. v1 = legacy (host-redirect paths only,
+# no `origin` field — treated as origin "host"). v2 adds the `origin`
+# field so the guest can flag a file that lives on its own disk
+# ("guest") versus one reached through the host-home redirect ("host").
+_VERSION = 2
+_ACCEPTED_VERSIONS = (1, 2)
 _MAX_REQUEST_BYTES_DEFAULT = 64 * 1024
 _MAX_REQUEST_DEPTH_DEFAULT = 8
 _MAX_IN_FLIGHT_DEFAULT = 200
@@ -79,6 +84,10 @@ _POLL_INTERVAL_DEFAULT = 0.5
 _REQUEST_FILE_RE = re.compile(r"^[0-9a-fA-F-]{8,64}\.json$")
 _SLUG_RE = re.compile(r"^[a-z0-9-]+$")
 _POD_ID_RE = re.compile(r"^[a-z0-9-]+$")
+# A guest-local path is a Windows drive path (``C:\…``). Validated only
+# for ``origin="guest"`` requests; host-redirect requests keep the
+# ``\\tsclient\…`` prefix check.
+_GUEST_PATH_RE = re.compile(r"^[A-Za-z]:\\")
 
 
 @dataclass
@@ -91,6 +100,7 @@ class ListenerStats:
     rejected_schema: int = 0
     rejected_unknown_app: int = 0
     rejected_path: int = 0
+    rejected_guest_unsupported: int = 0
     rejected_replay: int = 0
     rejected_in_flight: int = 0
     janitor_removed: int = 0
@@ -108,6 +118,13 @@ class ListenerConfig:
     max_in_flight: int = _MAX_IN_FLIGHT_DEFAULT
     janitor_age_seconds: int = _JANITOR_AGE_SECS_DEFAULT
     poll_interval: float = _POLL_INTERVAL_DEFAULT
+    # Resolver for guest-local (``origin="guest"``) requests: returns the
+    # host path where the guest's ``C:\`` is mounted (gvfs SMB), mounting it
+    # on demand, or ``None`` if the guest disk can't be reached. ``None``
+    # here (the default) means guest-local reverse-open isn't wired up and
+    # such requests are rejected cleanly. The daemon injects the real
+    # resolver (``lambda: guest_disk.ensure_guest_mount(cfg)``).
+    guest_mount: Callable[[], Path | None] | None = None
 
 
 class Listener:
@@ -273,6 +290,14 @@ class Listener:
             _safe_unlink(path)
             return
 
+        # Guest-local files (origin="guest") live on the guest's own disk,
+        # reached through the host SMB mount of the guest C: (see
+        # guest_disk.ensure_guest_mount). Resolve + spawn here; the
+        # host-redirect (\\tsclient) path falls through to safe_open_unc.
+        if data.get("origin", "host") == "guest":
+            self._handle_guest_request(path, slug, app, data["path"])
+            return
+
         unc = data["path"]
         try:
             with safe_open_unc(unc, self._cfg.share_roots) as safe:
@@ -316,6 +341,72 @@ class Listener:
         # spawn-error path above leaves the UUID unrecorded so the
         # guest can retry without hitting the replay reject. The
         # path-reject branch DOES record nothing for the same reason.
+        self._seen.add(uuid)
+        self._stats.accepted += 1
+        _safe_unlink(path)
+
+    def _handle_guest_request(self, path: Path, slug: str, app: object, win_path: str) -> None:
+        """Open a guest-local file (``C:\\…``) via the host SMB mount of guest C:.
+
+        Resolves the mount on demand through the injected ``guest_mount``
+        resolver, maps the Windows path onto it, and spawns the app. Any
+        failure (no resolver, mount unavailable, bad path, missing file,
+        spawn error) rejects cleanly and drops the request — the guest can
+        retry. The UUID is recorded only after a successful spawn.
+        """
+        uuid = path.stem
+        resolver = self._cfg.guest_mount
+        if resolver is None:
+            self._stats.rejected_guest_unsupported += 1
+            log.warning(
+                "listener: guest-local reverse-open not enabled (%s): %s",
+                path.name,
+                win_path,
+            )
+            _safe_unlink(path)
+            return
+
+        try:
+            mount_root = resolver()
+        except Exception as exc:  # noqa: BLE001
+            mount_root = None
+            log.warning("listener: guest mount resolver failed (%s): %s", path.name, exc)
+
+        if mount_root is None:
+            self._stats.rejected_path += 1
+            log.warning("listener: guest disk not mounted, can't open %s (%s)", win_path, path.name)
+            _safe_unlink(path)
+            return
+
+        from winpodx.core.guest_disk import guest_win_path_to_host
+
+        host_path = guest_win_path_to_host(win_path, Path(mount_root))
+        if host_path is None:
+            self._stats.rejected_path += 1
+            log.warning("listener: guest path rejected (%s): %s", path.name, win_path)
+            _safe_unlink(path)
+            return
+        if not host_path.exists():
+            self._stats.rejected_path += 1
+            log.warning(
+                "listener: guest file not found under mount (%s): %s -> %s",
+                path.name,
+                win_path,
+                host_path,
+            )
+            _safe_unlink(path)
+            return
+
+        argv = substitute_path(app.exec_argv, str(host_path))  # type: ignore[attr-defined]
+        log.info("listener: spawning (guest) slug=%s argv=%r", slug, argv)
+        try:
+            self._spawn(argv, {})
+        except OSError as exc:
+            self._stats.spawn_errors += 1
+            log.warning("listener: spawn failed for %s: %s", slug, exc)
+            _safe_unlink(path)
+            return
+
         self._seen.add(uuid)
         self._stats.accepted += 1
         _safe_unlink(path)
@@ -383,11 +474,15 @@ def _validate_schema(data: object) -> str | None:
     """
     if not isinstance(data, dict):
         return "not a JSON object"
-    if data.get("version") != _VERSION:
-        return f"version != {_VERSION} (got {data.get('version')!r})"
+    if data.get("version") not in _ACCEPTED_VERSIONS:
+        return f"version not in {_ACCEPTED_VERSIONS} (got {data.get('version')!r})"
     app = data.get("app")
     if not isinstance(app, str) or not _SLUG_RE.fullmatch(app):
         return "app field invalid"
+    # origin defaults to "host" for v1 requests (no origin field).
+    origin = data.get("origin", "host")
+    if origin not in ("host", "guest"):
+        return "origin must be 'host' or 'guest'"
     path = data.get("path")
     if not isinstance(path, str):
         return "path field not a string"
@@ -395,7 +490,12 @@ def _validate_schema(data: object) -> str | None:
         return "path field contains NUL"
     if len(path.encode("utf-8")) > 4096:
         return "path field exceeds 4096 bytes"
-    if not path.startswith("\\\\tsclient\\") and not path.startswith("//tsclient/"):
+    if origin == "guest":
+        # Guest-local file: a Windows drive path (C:\…), resolved later
+        # against the guest-disk mount rather than a \\tsclient\ share.
+        if not _GUEST_PATH_RE.match(path):
+            return "guest path must be a drive path (C:\\…)"
+    elif not path.startswith("\\\\tsclient\\") and not path.startswith("//tsclient/"):
         # Accept both Windows backslash form and forward-slash form
         # (Go's filepath.ToSlash leaves the latter when the shim
         # rendering pipeline doubles back through cross-platform Path).
